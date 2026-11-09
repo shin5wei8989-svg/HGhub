@@ -44,7 +44,8 @@ jobs:
 
       - name: 生成 Xcode 工程
         env:
-          APPLE_DEVELOPMENT_TEAM: ""
+          # 占位 Team ID：init 强制要求非空；实际构建时已关闭签名，不会用到
+          APPLE_DEVELOPMENT_TEAM: "1A2B3C4D5E"
         run: pnpm tauri ios init --ci
 
       - name: 关闭代码签名（改工程配置）
