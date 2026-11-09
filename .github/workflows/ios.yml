@@ -15,10 +15,18 @@ env:
 jobs:
   ios:
     name: iOS (unsigned ipa)
-    runs-on: macos-latest
+    # Xcode 26 工具链不再提供 swiftCompatibility56，而 swift-rs 的 Swift 胶水层
+    # 固定按 iOS 13 编译并引用该库；Xcode 16（macos-15 runner）自带兼容库
+    runs-on: macos-15
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
+
+      - name: 环境诊断
+        run: |
+          xcodebuild -version
+          /bin/ls /Applications | /usr/bin/grep -i xcode || true
+          find /Applications -name 'libswiftCompatibility56.a' 2>/dev/null | /usr/bin/head -3 || true
 
       - uses: pnpm/action-setup@v4
         with:
@@ -34,7 +42,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-          key: ios
+          key: ios-xcode16-v1
 
       - name: 安装 xcodegen
         run: brew install xcodegen
@@ -93,6 +101,7 @@ jobs:
           set -uo pipefail
           set +e
           export PATH="$HOME/.cargo/bin:$PATH"
+          export IPHONEOS_DEPLOYMENT_TARGET=15.4
           pnpm tauri ios build --export-method debugging
           code=$?
           echo "tauri ios build exit code: $code"
