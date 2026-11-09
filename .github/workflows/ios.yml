@@ -46,7 +46,17 @@ jobs:
         env:
           # 占位 Team ID：init 强制要求非空；实际构建时已关闭签名，不会用到
           APPLE_DEVELOPMENT_TEAM: "1A2B3C4D5E"
-        run: pnpm tauri ios init --ci
+        run: |
+          # Xcode 26 链接 iOS 15.0 目标时缺 swiftCompatibility56 库；15.4 起系统自带 Swift 5.6 运行时
+          /usr/bin/python3 - <<'EOF'
+          import json
+          p = 'src-tauri/tauri.ios.conf.json'
+          c = json.load(open(p))
+          c.setdefault('bundle', {}).setdefault('iOS', {})['minimumSystemVersion'] = '15.4'
+          json.dump(c, open(p, 'w'), indent=2)
+          print('minimumSystemVersion ->', c['bundle']['iOS']['minimumSystemVersion'])
+          EOF
+          pnpm tauri ios init --ci
 
       - name: 关闭代码签名（改工程配置）
         run: |
@@ -57,6 +67,7 @@ jobs:
           sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PBX"
           sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' "$PBX"
           sed -i '' -E 's/DEVELOPMENT_TEAM = [A-Z0-9]*;/DEVELOPMENT_TEAM = "";/g' "$PBX"
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/IPHONEOS_DEPLOYMENT_TARGET = 15.4;/g' "$PBX"
           /usr/bin/python3 - "$PBX" <<'EOF'
           import re, sys
           p = sys.argv[1]
