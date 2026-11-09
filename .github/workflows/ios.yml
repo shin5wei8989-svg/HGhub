@@ -75,34 +75,27 @@ jobs:
               print("CODE_SIGNING_ALLOWED already present")
           EOF
 
-      - name: 构建前端（Rust 静态库会内嵌 dist）
-        run: pnpm build
-
-      - name: xcodebuild 产出未签名 .app
+      - name: 构建（tauri 包装命令；导出 ipa 因无签名失败属预期，只要 .app 产出即可）
+        env:
+          APPLE_DEVELOPMENT_TEAM: "1A2B3C4D5E"
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          set +e
           export PATH="$HOME/.cargo/bin:$PATH"
-          PROJ="$(ls -d src-tauri/gen/apple/*.xcodeproj | head -n 1)"
-          APP_NAME="$(basename "$PROJ" .xcodeproj)"
-          SCHEME="${APP_NAME}_iOS"
-          echo "== project: $PROJ"
-          echo "== scheme: $SCHEME"
-          xcodebuild -list -project "$PROJ"
-          xcodebuild -project "$PROJ" \
-            -scheme "$SCHEME" \
-            -configuration release \
-            -destination 'generic/platform=iOS' \
-            -derivedDataPath "$PWD/ios-dd" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            DEVELOPMENT_TEAM="" \
-            build
+          pnpm tauri ios build --export-method debugging
+          code=$?
+          echo "tauri ios build exit code: $code"
+          APP_PATH="$(find src-tauri/gen/apple/build -name 'HGhub.app' -type d -path '*iphoneos*' | head -n 1)"
+          echo "app: ${APP_PATH:-<none>}"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::未产出 .app（构建真正失败）"
+            exit 1
+          fi
 
       - name: 打包无签名 ipa
         run: |
           set -euo pipefail
-          APP_PATH="$(find ios-dd/Build/Products -maxdepth 2 -name '*.app' | head -n 1)"
+          APP_PATH="$(find src-tauri/gen/apple/build -name 'HGhub.app' -type d -path '*iphoneos*' | head -n 1)"
           if [ -z "$APP_PATH" ]; then
             echo "::error::未找到构建产物 .app"
             exit 1
