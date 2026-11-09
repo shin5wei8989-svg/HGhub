@@ -1,0 +1,124 @@
+name: iOS build
+
+# 手动触发：Actions 页面 → iOS build → Run workflow
+# 产出无签名 ipa（Payload 手工打包），下载后用全能签等工具重签安装
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-build
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+
+jobs:
+  ios:
+    name: iOS (unsigned ipa)
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ios
+
+      - name: 安装 xcodegen
+        run: brew install xcodegen
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 生成 Xcode 工程
+        env:
+          APPLE_DEVELOPMENT_TEAM: ""
+        run: pnpm tauri ios init --ci
+
+      - name: 关闭代码签名（改工程配置）
+        run: |
+          set -euo pipefail
+          PROJ="$(ls -d src-tauri/gen/apple/*.xcodeproj | head -n 1)"
+          PBX="$PROJ/project.pbxproj"
+          echo "patching $PBX"
+          sed -i '' 's/CODE_SIGN_STYLE = Automatic;/CODE_SIGN_STYLE = Manual;/g' "$PBX"
+          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' "$PBX"
+          sed -i '' -E 's/DEVELOPMENT_TEAM = [A-Z0-9]*;/DEVELOPMENT_TEAM = "";/g' "$PBX"
+          /usr/bin/python3 - "$PBX" <<'EOF'
+          import re, sys
+          p = sys.argv[1]
+          with open(p, encoding="utf-8") as f:
+              content = f.read()
+          if "CODE_SIGNING_ALLOWED" not in content:
+              content = re.sub(
+                  r"(buildSettings = \{)",
+                  r"\1\n\t\t\t\tCODE_SIGNING_ALLOWED = NO;",
+                  content,
+              )
+              with open(p, "w", encoding="utf-8") as f:
+                  f.write(content)
+              print("injected CODE_SIGNING_ALLOWED = NO")
+          else:
+              print("CODE_SIGNING_ALLOWED already present")
+          EOF
+
+      - name: 构建前端（Rust 静态库会内嵌 dist）
+        run: pnpm build
+
+      - name: xcodebuild 产出未签名 .app
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          PROJ="$(ls -d src-tauri/gen/apple/*.xcodeproj | head -n 1)"
+          APP_NAME="$(basename "$PROJ" .xcodeproj)"
+          SCHEME="${APP_NAME}_iOS"
+          echo "== project: $PROJ"
+          echo "== scheme: $SCHEME"
+          xcodebuild -list -project "$PROJ"
+          xcodebuild -project "$PROJ" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/ios-dd" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            build
+
+      - name: 打包无签名 ipa
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find ios-dd/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::未找到构建产物 .app"
+            exit 1
+          fi
+          echo "app: $APP_PATH"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          IPA="HGhub_${VERSION}_unsigned.ipa"
+          rm -f "$IPA"
+          zip -qry "$IPA" Payload
+          /usr/bin/plutil -p "Payload/$(basename "$APP_PATH")/Info.plist" | /usr/bin/grep -E "CFBundleIdentifier|CFBundleShortVersionString|MinimumOSVersion" || true
+          ls -lh "$IPA"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HGhub-ios-ipa
+          path: HGhub_*_unsigned.ipa
+          if-no-files-found: error
