@@ -4,6 +4,10 @@ name: iOS build
 # 产出无签名 ipa（Payload 手工打包），下载后用全能签等工具重签安装
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ios.yml'
 
 concurrency:
   group: ios-build
